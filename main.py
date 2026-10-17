@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
@@ -22,10 +23,13 @@ class ShortIn(BaseModel):
     url: str
 
 
-def me(auth: str | None):
-    if not auth or not auth.startswith("Bearer "):
-        raise HTTPException(401, "Login first: /docs -> login -> Authorize")
-    data = read_token(auth[7:])
+bearer = HTTPBearer(auto_error=False)
+
+
+def me(cred: HTTPAuthorizationCredentials | None = Depends(bearer)):
+    if not cred:
+        raise HTTPException(401, "Login first: click Authorize, paste token")
+    data = read_token(cred.credentials)
     if not data:
         raise HTTPException(401, "Token bad or expired")
     row = db().execute("SELECT * FROM users WHERE email=?", (data["sub"],)).fetchone()
@@ -72,8 +76,7 @@ def login(b: Login):
 
 
 @app.post("/api/shorten", status_code=201)
-def shorten(b: ShortIn, authorization: str = Header(default="")):
-    u = me(authorization)
+def shorten(b: ShortIn, u: dict = Depends(me)):
     url = b.url.strip()
     if not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
@@ -102,16 +105,14 @@ def go(code: str):
 
 
 @app.get("/api/links")
-def my_links(authorization: str = Header(default="")):
-    u = me(authorization)
+def my_links(u: dict = Depends(me)):
     rows = db().execute("SELECT * FROM links WHERE owner=? ORDER BY created DESC",
                         (u["email"],)).fetchall()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/links/{code}/stats")
-def link_stats(code: str, authorization: str = Header(default="")):
-    u = me(authorization)
+def link_stats(code: str, u: dict = Depends(me)):
     r = db().execute("SELECT * FROM links WHERE code=?", (code,)).fetchone()
     if not r:
         raise HTTPException(404, "Not found")
@@ -121,8 +122,7 @@ def link_stats(code: str, authorization: str = Header(default="")):
 
 
 @app.delete("/api/links/{code}")
-def delete(code: str, authorization: str = Header(default="")):
-    u = me(authorization)
+def delete(code: str, u: dict = Depends(me)):
     c = db()
     r = c.execute("SELECT * FROM links WHERE code=?", (code,)).fetchone()
     if not r:
